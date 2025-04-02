@@ -20,7 +20,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('CSV_UPDATER_VERSION', '1.1.0');
+define('CSV_UPDATER_VERSION', '1.1.1');
 define('CSV_UPDATER_PATH', plugin_dir_path(__FILE__));
 define('CSV_UPDATER_URL', plugin_dir_url(__FILE__));
 define('CSV_UPDATER_BASENAME', plugin_basename(__FILE__));
@@ -28,21 +28,10 @@ define('CSV_UPDATER_BASENAME', plugin_basename(__FILE__));
 // Require autoloader
 require_once CSV_UPDATER_PATH . 'includes/class-autoloader.php';
 
-// Ensure autoloader is registered
-\Novano\CSVUpdater\Autoloader::register();
-
-// Plugin initialization function
+// Plugin initialization
 function csv_updater_init() {
-    // Debug logging
-    error_log('CSV Updater: Initializing plugin');
-    
-    try {
-        // Initialize the plugin
-        $core = \Novano\CSVUpdater\Core::get_instance();
-    } catch (\Exception $e) {
-        // Log any initialization errors
-        error_log('CSV Updater Initialization Error: ' . $e->getMessage());
-    }
+    // Initialize main plugin class
+    \Novano\CSVUpdater\Core::get_instance();
 }
 add_action('plugins_loaded', 'csv_updater_init');
 

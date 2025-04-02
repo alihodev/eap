@@ -87,6 +87,7 @@ class CSV_Import_Process extends \WP_Background_Process {
      * Send import completion notification
      */
     private function send_import_completion_notification() {
+        return;
         $to = get_option('admin_email');
         $subject = 'CSV Import Completed';
         $message = "The CSV import process has been completed.\n";

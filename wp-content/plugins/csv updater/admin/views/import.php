@@ -22,7 +22,7 @@ if (!defined('ABSPATH')) {
                     </th>
                     <td>
                         <input type="file" name="csv_file" id="csv_file" accept=".csv">
-                        <p class="description">Select the CSV file to import products. Max file size: 100MB</p>
+                        <p class="description">Select the CSV file to import products.</p>
                     </td>
                 </tr>
             </table>
@@ -39,18 +39,22 @@ if (!defined('ABSPATH')) {
     </div>
 
     <div class="card">
-        <h2>Debug Information</h2>
-        <div id="import-debug">
-            <!-- Debugging information -->
+        <h2>Import Log</h2>
+        <div id="import-log">
+            <!-- Import log will be displayed here -->
         </div>
     </div>
 </div>
 
 <style>
-#import-status, #import-debug {
+#import-status {
     margin-bottom: 15px;
-    padding: 10px;
+}
+#import-log {
+    max-height: 300px;
+    overflow-y: auto;
     background-color: #f4f4f4;
+    padding: 10px;
     border: 1px solid #ddd;
 }
 .import-error {
@@ -68,15 +72,10 @@ jQuery(document).ready(function($) {
         
         // Clear previous status and log
         $('#import-status').html('');
-        $('#import-debug').html('');
+        $('#import-log').html('');
         
         // Create FormData object
         var formData = new FormData(this);
-        
-        // Debug: Log form data
-        for (var pair of formData.entries()) {
-            $('#import-debug').append('<p>Form Data: ' + pair[0] + ' - ' + pair[1] + '</p>');
-        }
         
         // Show loading indicator
         $('#import-status').html('<p>Uploading and processing CSV...</p>');
@@ -87,19 +86,7 @@ jQuery(document).ready(function($) {
             data: formData,
             processData: false,
             contentType: false,
-            xhr: function() {
-                var xhr = new window.XMLHttpRequest();
-                xhr.upload.addEventListener("progress", function(evt) {
-                    if (evt.lengthComputable) {
-                        var percentComplete = evt.loaded / evt.total;
-                        $('#import-debug').append('<p>Upload Progress: ' + Math.round(percentComplete * 100) + '%</p>');
-                    }
-                }, false);
-                return xhr;
-            },
             success: function(response) {
-                $('#import-debug').append('<p>Raw Response: ' + JSON.stringify(response) + '</p>');
-                
                 if (response.success) {
                     $('#import-status').html(
                         '<p class="import-success">' + 
@@ -117,23 +104,57 @@ jQuery(document).ready(function($) {
                     );
                 }
             },
-            error: function(xhr, status, error) {
+            error: function() {
                 $('#import-status').html(
-                    '<p class="import-error">Failed to start import.</p>'
-                );
-                $('#import-debug').append(
-                    '<p>Error Details:</p>' +
-                    '<p>Status: ' + status + '</p>' +
-                    '<p>Error: ' + error + '</p>' +
-                    '<p>Response Text: ' + xhr.responseText + '</p>'
+                    '<p class="import-error">Failed to start import. Please try again.</p>'
                 );
             }
         });
     });
 
     function checkImportStatus(importId) {
-        // Similar to previous implementation
-        // ... (keep the existing checkImportStatus function)
+        $.ajax({
+            url: ajaxurl,
+            type: 'POST',
+            data: {
+                action: 'csv_updater_import_status',
+                import_id: importId,
+                nonce: '<?php echo wp_create_nonce('csv_updater_import_status_nonce'); ?>'
+            },
+            success: function(response) { 
+                if (response.success) {
+                    // Update status
+                    $('#import-status').html(
+                        '<p class="import-' + 
+                        (response.data.status === 'completed' ? 'success' : 'progress') + 
+                        '">' + response.data.message + '</p>'
+                    );
+
+                    // Update log
+                    if (response.data.log) {
+                        $('#import-log').html(response.data.log);
+                    }
+
+                    // Continue checking if not completed
+                    if (response.data.status !== 'completed') {
+                        setTimeout(function() {
+                            checkImportStatus(importId);
+                        }, 5000); // Check every 5 seconds
+                    }
+                } else {
+                    $('#import-status').html(
+                        '<p class="import-error">' + 
+                        (response.data ? response.data.message : 'Failed to check import status') + 
+                        '</p>'
+                    );
+                }
+            },
+            error: function() {
+                $('#import-status').html(
+                    '<p class="import-error">Failed to check import status. Please refresh the page.</p>'
+                );
+            }
+        });
     }
 });
 </script>
