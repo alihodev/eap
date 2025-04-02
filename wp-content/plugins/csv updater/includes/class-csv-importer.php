@@ -3,7 +3,7 @@
 namespace Novano\CSVUpdater;
 
 /**
- * Handles CSV file parsing and import process
+ * Handles CSV file parsing and import process with enhanced logging
  */
 class CSV_Importer
 {
@@ -29,12 +29,20 @@ class CSV_Importer
     private $config;
 
     /**
+     * CSV Mapper instance
+     *
+     * @var CSV_Mapper
+     */
+    private $csv_mapper;
+
+    /**
      * Constructor
      */
     public function __construct()
     {
         $this->logger = new Logger();
         $this->background_process = new CSV_Import_Process();
+        $this->csv_mapper = new CSV_Mapper($this->logger);
         $this->config = get_option('csv_updater_options', [
             'max_products_per_batch' => 500,
             'batch_size' => 100
@@ -49,54 +57,66 @@ class CSV_Importer
      */
     public function import_csv($file_path)
     {
+        $this->logger->info("Starting detailed CSV import from {$file_path}");
+
         // Validate file
         if (!file_exists($file_path)) {
-            $this->logger->error("CSV file not found: {$file_path}");
+            $this->logger->error("CRITICAL: CSV file does not exist: {$file_path}");
             return [
                 'success' => false,
                 'message' => 'CSV file not found',
-                'total_rows' => 0
+                'total_rows' => 0,
+                'processed_rows' => 0
             ];
         }
 
         // Validate file is readable
         if (!is_readable($file_path)) {
-            $this->logger->error("CSV file is not readable: {$file_path}");
+            $this->logger->error("CRITICAL: CSV file is not readable: {$file_path}");
             return [
                 'success' => false,
                 'message' => 'CSV file is not readable',
-                'total_rows' => 0
+                'total_rows' => 0,
+                'processed_rows' => 0
             ];
         }
 
         // Open CSV file
         $handle = fopen($file_path, 'r');
         if ($handle === false) {
-            $this->logger->error("Unable to open CSV file: {$file_path}");
+            $this->logger->error("CRITICAL: Unable to open CSV file: {$file_path}");
             return [
                 'success' => false,
                 'message' => 'Unable to open CSV file',
-                'total_rows' => 0
+                'total_rows' => 0,
+                'processed_rows' => 0
             ];
         }
 
         // Read and validate headers
         $headers = fgetcsv($handle);
         if ($headers === false) {
-            $this->logger->error("Unable to read CSV headers");
+            $this->logger->error("CRITICAL: Unable to read CSV headers");
             fclose($handle);
             return [
                 'success' => false,
                 'message' => 'Unable to read CSV headers',
-                'total_rows' => 0
+                'total_rows' => 0,
+                'processed_rows' => 0
             ];
         }
+
+        // Log headers for debugging
+        $this->logger->info("CSV Headers: " . implode(', ', $headers));
 
         // Normalize headers (remove whitespace, lowercase)
         $headers = array_map(function ($header) {
             return trim(strtolower(str_replace([' ', '[', ']'], ['_', '', ''], $header)));
         }, $headers);
         
+        // Log normalized headers
+        $this->logger->info("Normalized Headers: " . implode(', ', $headers));
+
         // Track import stats
         $import_stats = [
             'total_rows' => 0,
@@ -111,21 +131,49 @@ class CSV_Importer
         $batch_size = $this->config['batch_size'] ?? 100;
 
         // Process rows
+        $row_number = 1; // Start from 1 to account for header row
         while (($row = fgetcsv($handle)) !== false) {
-             
+            $row_number++;
+
+            // Skip empty rows
+            if (empty(array_filter($row))) {
+                $this->logger->warning("Skipping empty row: {$row_number}");
+                continue;
+            }
+
             $import_stats['total_rows']++;
 
             // Combine headers with row data
-            $product_data = array_combine($headers, $row);
+            try {
+                $product_data = array_combine($headers, $row);
+            } catch (\Exception $e) {
+                $this->logger->error("Error combining headers and row data", [
+                    'row_number' => $row_number,
+                    'headers_count' => count($headers),
+                    'row_count' => count($row),
+                    'error' => $e->getMessage()
+                ]);
+                $import_stats['skipped_rows']++;
+                continue;
+            }
 
-            // Validate product data (basic check)
-            if (!$this->validate_product_data($product_data)) {
+            // Log raw product data for debugging
+            $this->logger->debug("Raw Product Data (Row {$row_number})", $product_data);
+
+            // Transform row using mapper
+            $mapped_data = $this->csv_mapper->transform_row($product_data);
+
+            // Log mapped data
+            $this->logger->debug("Mapped Product Data (Row {$row_number})", $mapped_data);
+
+            // Validate product data
+            if (!$this->validate_product_data($mapped_data)) {
                 $import_stats['skipped_rows']++;
                 continue;
             }
 
             // Add to batch
-            $batch[] = $product_data;
+            $batch[] = $mapped_data;
 
             // Dispatch batch when full
             if (count($batch) >= $batch_size) {
@@ -136,6 +184,7 @@ class CSV_Importer
 
             // Optional: Break if max products limit reached
             if ($import_stats['total_rows'] >= ($this->config['max_products_per_batch'] ?? 10000)) {
+                $this->logger->info("Reached max products limit");
                 break;
             }
         } 
@@ -150,10 +199,7 @@ class CSV_Importer
         fclose($handle);
 
         // Log import summary
-        $this->logger->info("CSV Import Summary");
-        $this->logger->info("Total Rows: {$import_stats['total_rows']}");
-        $this->logger->info("Processed Rows: {$import_stats['processed_rows']}");
-        $this->logger->info("Skipped Rows: {$import_stats['skipped_rows']}");
+        $this->logger->info("CSV Import Summary", $import_stats);
 
         return $import_stats;
     }
@@ -165,6 +211,8 @@ class CSV_Importer
      */
     private function process_batch($batch)
     {
+        $this->logger->info("Processing batch of " . count($batch) . " products");
+
         // Add entire batch to background processing queue
         foreach ($batch as $product_data) {
             $this->background_process->push_to_queue($product_data);
@@ -177,18 +225,17 @@ class CSV_Importer
     /**
      * Validate product data before processing
      *
-     * @param array $product_data Product data row
+     * @param array $product_data Mapped product data
      * @return bool
      */
     private function validate_product_data($product_data)
     {
         // Basic validation
-        if (empty($product_data['code']) || empty($product_data['description'])) {
-            $this->logger->warning("Skipping product - missing required fields");
+        if (empty($product_data['name']) || empty($product_data['sku'])) {
+            $this->logger->warning("Skipping product - missing required fields", $product_data);
             return false;
         }
 
-        // Additional validation can be added here
         return true;
     }
 
@@ -200,9 +247,17 @@ class CSV_Importer
      */
     public function handle_file_upload($file_data)
     {
+        // Additional logging for file upload
+        $this->logger->info("File upload details", [
+            'name' => $file_data['name'] ?? 'Unknown',
+            'type' => $file_data['type'] ?? 'Unknown',
+            'size' => $file_data['size'] ?? 'Unknown',
+            'tmp_name' => $file_data['tmp_name'] ?? 'Unknown'
+        ]);
+
         // Validate upload
         if (!isset($file_data['tmp_name']) || !is_uploaded_file($file_data['tmp_name'])) {
-            $this->logger->error("Invalid file upload");
+            $this->logger->error("Invalid file upload: Not an uploaded file");
             return false;
         }
 
@@ -227,6 +282,13 @@ class CSV_Importer
         // Move uploaded file
         if (move_uploaded_file($file_data['tmp_name'], $destination)) {
             $this->logger->info("CSV file uploaded: {$destination}");
+            
+            // Additional file validation
+            $file_contents = file_get_contents($destination);
+            $this->logger->info("First 500 characters of file:", [
+                'content' => substr($file_contents, 0, 500)
+            ]);
+
             return $destination;
         }
 

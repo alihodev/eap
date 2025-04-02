@@ -88,6 +88,10 @@ define('WP_ALLOW_MULTISITE', true);
  *
  * @link https://wordpress.org/support/article/debugging-in-wordpress/
  */
+
+ define('ALTERNATE_WP_CRON', true);
+ define('WP_CRON_LOCK_TIMEOUT', 300);
+
 if (! defined('WP_DEBUG')) {
 	define('WP_DEBUG', true);
 	define('WP_DEBUG_LOG', true);
@@ -102,6 +106,8 @@ if (! defined('WP_DEBUG')) {
 if (! defined('ABSPATH')) {
 	define('ABSPATH', __DIR__ . '/');
 }
+
+
 
 /** Sets up WordPress vars and included files. */
 require_once ABSPATH . 'wp-settings.php';

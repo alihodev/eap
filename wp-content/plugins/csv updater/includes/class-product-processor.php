@@ -15,12 +15,23 @@ class Product_Processor {
     private $logger;
 
     /**
+     * Configuration options
+     *
+     * @var array
+     */
+    private $config;
+
+    /**
      * Constructor
      *
      * @param Logger $logger Logger instance
      */
     public function __construct(Logger $logger) {
         $this->logger = $logger;
+        $this->config = get_option('csv_updater_options', [
+            'image_width' => 400,
+            'image_height' => 400
+        ]);
     }
 
     /**
@@ -29,7 +40,7 @@ class Product_Processor {
      * @param array $product_data Raw product data from CSV
      * @return bool
      */
-    public function process_product($product_data) {
+    public function process_product($product_data) { 
         try {
             // Validate required fields
             if (empty($product_data['code']) || empty($product_data['description'])) {
@@ -40,8 +51,9 @@ class Product_Processor {
             // Prepare product data
             $product_args = $this->prepare_product_args($product_data);
 
-            // Ensure HPOS compatibility for product lookup
-            $existing_product_id = $this->get_product_id_by_sku('EAP' . $product_data['code']);
+            // Get existing product by SKU
+            $sku = 'EAP' . $product_data['code'];
+            $existing_product_id = $this->get_product_id_by_sku($sku);
 
             if ($existing_product_id) {
                 // Update existing product
@@ -50,19 +62,32 @@ class Product_Processor {
                 if (!$product) {
                     $this->logger->error('Failed to retrieve existing product', [
                         'product_id' => $existing_product_id,
-                        'sku' => 'EAP' . $product_data['code']
+                        'sku' => $sku
                     ]);
                     return false;
                 }
 
-                $product->set_props($product_args);
+                // Update product properties
+                foreach ($product_args as $prop => $value) {
+                    $setter = 'set_' . $prop;
+                    if (method_exists($product, $setter)) {
+                        $product->$setter($value);
+                    }
+                }
                 $product->save();
                 
                 $this->logger->info("Updated product: {$product_data['code']}");
             } else {
                 // Create new product
                 $product = new \WC_Product_Simple();
-                $product->set_props($product_args);
+                
+                // Set product properties
+                foreach ($product_args as $prop => $value) {
+                    $setter = 'set_' . $prop;
+                    if (method_exists($product, $setter)) {
+                        $product->$setter($value);
+                    }
+                }
                 $product->save();
                 
                 $this->logger->info("Created new product: {$product_data['code']}");
@@ -113,16 +138,20 @@ class Product_Processor {
      * @return array
      */
     private function prepare_product_args($product_data) {
+        // Basic price parsing, handling potential comma-separated decimal
+        $price = str_replace(',', '.', $product_data['p_mark'] ?? 0);
+        $price = floatval($price);
+
         return [
-            'name' => $product_data['description'],
+            'name' => $product_data['description'] ?? '',
             'description' => $product_data['description_2'] ?? '',
             'sku' => 'EAP' . $product_data['code'],
-            'regular_price' => $product_data['p_mark'] ?? 0,
+            'regular_price' => $price,
             'manage_stock' => true,
-            'stock_quantity' => $product_data['qty'] ?? 0,
-            'weight' => $product_data['kg'] ?? 0,
+            'stock_quantity' => intval($product_data['qty'] ?? 0),
+            'weight' => floatval($product_data['kg'] ?? 0),
             'tax_status' => !empty($product_data['vat']) ? 'taxable' : 'none',
-            'status' => 'publish', // Always publish
+            'status' => 'publish'
         ];
     }
 
@@ -174,6 +203,17 @@ class Product_Processor {
             $upload = wp_upload_bits("{$code}.jpg", null, file_get_contents($raw_image_path));
             
             if (!$upload['error']) {
+                // Resize image if needed
+                $image_editor = wp_get_image_editor($upload['file']);
+                if (!is_wp_error($image_editor)) {
+                    $image_editor->resize(
+                        $this->config['image_width'] ?? 400, 
+                        $this->config['image_height'] ?? 400, 
+                        false
+                    );
+                    $image_editor->save($upload['file']);
+                }
+
                 $attachment_id = $this->insert_attachment($upload['file'], $product->get_id());
                 $product->set_image_id($attachment_id);
                 $product->save();
