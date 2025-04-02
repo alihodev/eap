@@ -6,6 +6,18 @@ namespace Novano\CSVUpdater;
  */
 class Autoloader {
     /**
+     * Registered namespaces
+     *
+     * @var array
+     */
+    private static $namespaces = [
+        'Novano\\CSVUpdater\\' => [
+            'includes/',
+            'admin/'
+        ]
+    ];
+
+    /**
      * Register autoloader
      */
     public static function register() {
@@ -18,30 +30,49 @@ class Autoloader {
      * @param string $class Class name to load
      */
     public static function autoload($class) {
-        // Only autoload classes in our namespace
-        if (strpos($class, 'Novano\CSVUpdater') !== 0) {
+        // Check if class is in our namespaces
+        $matched_namespace = null;
+        foreach (array_keys(self::$namespaces) as $namespace) {
+            if (strpos($class, $namespace) === 0) {
+                $matched_namespace = $namespace;
+                break;
+            }
+        }
+
+        // If no matching namespace, return
+        if ($matched_namespace === null) {
             return;
         }
 
-        // Convert namespace to file path
-        $class = str_replace('Novano\CSVUpdater\\', '', $class);
-        $class = strtolower(str_replace('_', '-', $class));
+        // Remove namespace prefix
+        $relative_class = substr($class, strlen($matched_namespace));
 
-        $possible_paths = [
-            CSV_UPDATER_PATH . 'includes/class-' . $class . '.php',
-            CSV_UPDATER_PATH . 'admin/class-' . $class . '.php',
-            CSV_UPDATER_PATH . 'includes/' . $class . '.php',
-            CSV_UPDATER_PATH . 'admin/' . $class . '.php',
-        ];
+        // Convert class name to file path
+        $file_name = str_replace('\\', '/', strtolower(
+            'class-' . preg_replace('/([a-z])([A-Z])/', '$1-$2', $relative_class) . '.php'
+        ));
 
-        foreach ($possible_paths as $path) {
-            if (file_exists($path)) {
-                require_once $path;
+        // Try to find the file in registered paths
+        foreach (self::$namespaces[$matched_namespace] as $path) {
+            $full_path = CSV_UPDATER_PATH . $path . $file_name;
+            
+            if (file_exists($full_path)) {
+                require_once $full_path;
                 return;
             }
         }
+
+        // Optional: Log autoload failure
+        error_log("Could not load class: $class");
+    }
+
+    /**
+     * Add additional namespace paths
+     *
+     * @param string $namespace Namespace prefix
+     * @param array $paths Possible file paths
+     */
+    public static function add_namespace($namespace, $paths) {
+        self::$namespaces[$namespace] = $paths;
     }
 }
-
-// Register the autoloader
-Autoloader::register();
